@@ -1,0 +1,26 @@
+name: Release
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r requirements.txt
+      - run: python tests.py
+      - run: python build_release.py --output dist
+      - name: Publish a new immutable version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python channel_manager.py --version)
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "Release already exists; bump __version__ before publishing."
+            exit 1
+          fi
+          gh release create "$version" dist/channel-manager.tar.gz dist/SHA256SUMS --target "$GITHUB_SHA" --title "$version" --generate-notes

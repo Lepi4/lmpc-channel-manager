@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.db*
+*.log*
+config.json
+channel_gain.*
+hls_back.json
+probe_cache.json
+tvlink_data/
+dist/
+.env*

@@ -1,0 +1,9 @@
+{
+  "port": 3002,
+  "db_path": "/opt/channel-manager/channels.db",
+  "epg_url": "",
+  "auto_sync_secs": 21600,
+  "audio_gain_fix_enabled": false,
+  "force_video_unify": false,
+  "force_audio_aac": false
+}

@@ -1,5 +1,7 @@
 # LMPC Channel Manager
 
+Лицензирование: [PolyForm Noncommercial 1.0.0](LICENSE.md) для самостоятельных материалов Lepi4. Разрешены некоммерческое использование, копирование, изменение и распространение. [Область действия и лицензии стороннего кода](LICENSE-SCOPE.md).
+
 Local IPTV channel management and an HLS/MPEG-TS buffer for Lampa Home Media Center.
 Supports Tvheadend, Enigma2 and M3U sources, XMLTV EPG, per-source priorities,
 fallback streams and optional FFmpeg transcoding. Intended for a trusted home LAN.

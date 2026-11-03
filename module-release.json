@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "artifact_ref": "80e887a80f307f1c8ca842232a782bd2d6e23afa",
+  "published_utc": "2026-11-03T18:44:47.792138+00:00",
+  "components": {
+    "channel-manager": {
+      "file": "release/2026.11.01.1/channel-manager.tar.gz",
+      "sha256": "123110747797da1ac64b6d51332751163ec203b3fac621b966904653614e35e7",
+      "bytes": 85506,
+      "version": "2026.11.01.1"
+    }
+  },
+  "version": "2026.11.01.1"
+}

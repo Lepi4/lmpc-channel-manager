@@ -1,7 +1,7 @@
 """Build an allowlisted program-only package for the LMPC update executor."""
 import argparse, ast, hashlib, io, json, pathlib, tarfile
 
-FILES=['channel_manager.py','measure_gain.py','migrate_from_tvlink.py','requirements.txt','README.md']
+FILES=['channel_manager.py','measure_gain.py','migrate_from_tvlink.py','requirements.txt','README.md','LICENSE.md','LICENSE-SCOPE.md']
 def build(output):
     root=pathlib.Path(__file__).resolve().parent;tree=ast.parse((root/'channel_manager.py').read_text(encoding='utf-8'))
     version=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='__version__' for t in n.targets))

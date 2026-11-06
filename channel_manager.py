@@ -29,7 +29,7 @@ from xml.etree import ElementTree
 from aiohttp import web
 from contextlib import contextmanager
 
-__version__ = "2026.11.01.1"
+__version__ = "2026.11.06.1"
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
@@ -3695,10 +3695,15 @@ class StreamSession:
         # занижает результат даже на смотрибельном сигнале (проверено: 4.3 Мбит/с при пороге 6.0 — на деле
         # смотрибельно). Проба длиннее, порог мягче (доля от номинала настраивается ts_probe_min_ratio).
         probe_secs = CONFIG.get("ts_probe_secs", 8.0)
-        # калиброванная по факту скорость ЭТОГО канала (см. _read_ts), если уже известна — иначе общий
-        # bitrate_mbps как безопасный дефолт для канала, который ещё ни разу не читали напрямую
-        baseline   = StreamSession._ts_baseline_mbps.get(self._pkey(url), CONFIG.get("bitrate_mbps", 12.0))
-        min_mbps   = baseline * CONFIG.get("ts_probe_min_ratio", 0.3)
+        # TVHeadend сюда не входит: его битрейт на спокойной SD-сцене штатно около 2 Мбит/с («Че»),
+        # а без своей калибровки порог — 30% от номинала 12 Мбит/с = 3.6. Проба помечала живой поток
+        # мёртвым (лог: 1.6 < 3.6 и 2.0 < 3.6) и не возвращала основной источник. Скорость решает
+        # возврат у Энигмы и у TV Team (HLS, _probe_hls). Сохранённый замер TVHeadend для этого не нужен.
+        check_speed = "/stream/channel/" not in url
+        if not check_speed:
+            StreamSession._ts_baseline_mbps.pop(self._pkey(url), None)
+        baseline   = StreamSession._ts_baseline_mbps.get(self._pkey(url), CONFIG.get("bitrate_mbps", 12.0)) if check_speed else 0.0
+        min_mbps   = baseline * CONFIG.get("ts_probe_min_ratio", 0.3) if check_speed else 0.0
         tc = aiohttp.ClientTimeout(connect=5, sock_connect=5, sock_read=probe_secs + 5)
         try:
             connector = aiohttp.TCPConnector(family=socket.AF_INET)
@@ -3716,6 +3721,10 @@ class StreamSession:
                         log.warning(f"{self._tag} probe TS: невалидный TS")
                         return False
                     speed_mbps = len(buf) * 8 / elapsed / 1_000_000
+                    if not check_speed:
+                        log.info(f"{self._tag} probe TS: {len(buf)//1024} КБ за {elapsed:.1f}с"
+                                 f" → {speed_mbps:.1f} Мбит/с (TVHeadend, скорость не критерий)")
+                        return True
                     log.info(f"{self._tag} probe TS: {len(buf)//1024} КБ за {elapsed:.1f}с"
                              f" → {speed_mbps:.1f} Мбит/с (мин {min_mbps:.1f})")
                     if speed_mbps < min_mbps:

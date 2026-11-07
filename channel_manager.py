@@ -29,7 +29,7 @@ from xml.etree import ElementTree
 from aiohttp import web
 from contextlib import contextmanager
 
-__version__ = "2026.11.06.1"
+__version__ = "2026.11.07.1"
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
@@ -417,6 +417,8 @@ class EpgCache:
         # {epg_id: [(start_ts, stop_ts, title), ...]} — только ±48ч
         self._prog_cache:   dict[str, list[tuple[float, float, str]]] = {}
         self._fetched_at:   float = 0.0
+        self._fail_at:      float = 0.0
+        self.last_error:    str = ""
         self._lock = asyncio.Lock()
         self._refreshing = False
         self._refresh_done = asyncio.Event()
@@ -427,8 +429,12 @@ class EpgCache:
 
     async def _ensure_fresh(self, db_path: str | None, force: bool = False):
         async with self._lock:
-            age = asyncio.get_event_loop().time() - self._fetched_at
+            now = asyncio.get_event_loop().time()
+            age = now - self._fetched_at
             if not force and self._xml_filtered is not None and age < 3600:
+                return
+            # Сбойный источник не опрашиваем с каждым открытием плейлиста: прежний кэш остаётся.
+            if not force and self._fail_at and now - self._fail_at < 120:
                 return
             if self._refreshing:
                 wait_ev = self._refresh_done
@@ -442,17 +448,31 @@ class EpgCache:
             return
         try:
             raw = await self._fetch(db_path)
+            if not raw or b"<channel" not in raw:
+                self.last_error = self.last_error or "пустой ответ EPG"
+                self._fail_at = asyncio.get_event_loop().time()
+                log.warning("EPG: пустой ответ, прежний кэш и база сохранены")
+                return
             loop = asyncio.get_event_loop()
             filtered, prog_cache, ch_count = await loop.run_in_executor(
                 None, self._parse_and_filter, raw, db_path
             )
             del raw  # освобождаем сразу
+            if ch_count <= 0 or filtered is None:
+                self.last_error = self.last_error or "в EPG нет каналов"
+                self._fail_at = asyncio.get_event_loop().time()
+                log.warning("EPG: разбор не дал каналов, прежний кэш сохранён")
+                return
             log.info(f"EPG channels: {ch_count} записей, prog_cache: {sum(len(v) for v in prog_cache.values())} программ")
             async with self._lock:
                 self._xml_filtered = filtered
                 self._prog_cache   = prog_cache
                 self._fetched_at   = asyncio.get_event_loop().time()
+                self._fail_at = 0.0
+                self.last_error = ""
         except Exception as e:
+            self.last_error = type(e).__name__
+            self._fail_at = asyncio.get_event_loop().time()
             log.warning(f"EPG refresh error: {e}")
         finally:
             async with self._lock:
@@ -545,12 +565,28 @@ class EpgCache:
         except Exception as e:
             log.warning(f"EPG iterparse error: {e}")
 
-        # Обновляем epg_channels в DB батчем
+        # Пустой разбор не стирает уже скачанную программу: обрыв или битый XML иначе
+        # оставляли базу пустой до следующего успешного часа.
+        if not ch_rows:
+            log.warning("EPG: разбор без каналов, база программы не затронута")
+            db.close()
+            return None, {}, 0
         try:
             db.execute("DELETE FROM epg_channels")
             db.executemany(
                 "INSERT OR REPLACE INTO epg_channels (epg_id,display_name,display_norm,icon_url) VALUES (?,?,?,?)",
                 ch_rows
+            )
+            db.execute(
+                """UPDATE channels SET icon_url = (
+                       SELECT e.icon_url FROM epg_channels e
+                       WHERE e.epg_id = channels.epg_id AND e.icon_url != ''
+                   )
+                   WHERE icon_url = '' AND epg_id != ''
+                     AND EXISTS (
+                       SELECT 1 FROM epg_channels e
+                       WHERE e.epg_id = channels.epg_id AND e.icon_url != ''
+                     )"""
             )
             db.commit()
         except Exception as e:
@@ -576,7 +612,8 @@ class EpgCache:
             return raw
         except Exception as e:
             log.warning(f"EPG fetch error: {e}")
-            return b"<tv></tv>"
+            self.last_error = type(e).__name__
+            return None
 
     def get_current_program(self, epg_id: str) -> dict | None:
         """Возвращает {title, start, stop} текущей программы из кэша."""
@@ -1118,6 +1155,10 @@ async def _url_watch_loop(db_path: str | None = None):
 
 # ─── PLAYLIST ────────────────────────────────────────────────────────────────
 
+def _m3u_attr(value: str) -> str:
+    return (value or "").replace('"', "").replace("\r", " ").replace("\n", " ")
+
+
 def generate_m3u(db_path: str | None = None,
                  base_url: str | None = None, unify: bool = False) -> str:
     base = (base_url or f"http://localhost:{CONFIG['port']}").rstrip("/")
@@ -1132,8 +1173,11 @@ def generate_m3u(db_path: str | None = None,
     ]
 
     rows = db.execute("""
-        SELECT c.id, c.name, c.epg_id, c.group_name, c.icon_url, c.sort_order
+        SELECT c.id, c.name, c.epg_id, c.group_name,
+               CASE WHEN c.icon_url != '' THEN c.icon_url ELSE COALESCE(e.icon_url, '') END AS icon_url,
+               c.sort_order
         FROM channels c
+        LEFT JOIN epg_channels e ON e.epg_id = c.epg_id
         WHERE c.enabled=1
           AND c.sort_order > 0
           AND EXISTS (
@@ -1143,10 +1187,10 @@ def generate_m3u(db_path: str | None = None,
     """).fetchall()
 
     for ch in rows:
-        attrs = f'tvg-id="{ch["epg_id"]}" tvg-name="{ch["name"]}" tvg-chno="{ch["sort_order"]}" group-title="Каналы"'
+        attrs = f'tvg-id="{_m3u_attr(ch["epg_id"])}" tvg-name="{_m3u_attr(ch["name"])}" tvg-chno="{ch["sort_order"]}" group-title="Каналы"'
         if ch["icon_url"]:
-            attrs += f' tvg-logo="{ch["icon_url"]}"'
-        lines.append(f"#EXTINF:-1 {attrs},{ch['name']}")
+            attrs += f' tvg-logo="{_m3u_attr(ch["icon_url"])}"'
+        lines.append(f"#EXTINF:-1 {attrs},{_m3u_attr(ch['name'])}")
         lines.append(f"{base}/stream/{ch['id']}" + ("?unify=1" if unify else ""))
 
     db.close()
@@ -4665,6 +4709,8 @@ class App:
             n = await _epg_cache.refresh_epg_channels(self._db)
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)})
+        if _epg_cache.last_error:
+            return web.json_response({"ok": False, "error": _epg_cache.last_error, "count": n})
         return web.json_response({"ok": True, "count": n})
 
     async def h_epg_automap(self, req: web.Request) -> web.Response:
@@ -4765,6 +4811,24 @@ def make_app(tsb: TsbDaemon) -> web.Application:
     return app
 
 
+async def _epg_keepalive(db_path: str | None = None):
+    """Раз в 10 минут проверяет возраст программы. Старше часа — качает заново.
+    После сбоя повтор через 5 минут, удачный кэш при этом не затирается."""
+    await asyncio.sleep(90)
+    while True:
+        stamp = _epg_cache._fetched_at
+        age = asyncio.get_event_loop().time() - stamp
+        if stamp == 0 or age >= 3600:
+            try:
+                await _epg_cache.refresh_epg_channels(db_path)
+            except Exception:
+                log.exception("epg keepalive")
+            if _epg_cache._fetched_at == stamp:
+                await asyncio.sleep(300)
+                continue
+        await asyncio.sleep(600)
+
+
 async def _main_async():
     _first_run_setup(CONFIG["db_path"])
     tsb = TsbDaemon(CONFIG["db_path"])
@@ -4780,6 +4844,7 @@ async def _main_async():
     asyncio.create_task(_auto_sync_loop(CONFIG["db_path"]))
     asyncio.create_task(_url_watch_loop(CONFIG["db_path"]))
     asyncio.create_task(_epg_cache.refresh_epg_channels(CONFIG["db_path"]))
+    asyncio.create_task(_epg_keepalive(CONFIG["db_path"]))
     asyncio.create_task(tsb._refresh_loop())
     await asyncio.Event().wait()
 

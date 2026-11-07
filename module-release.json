@@ -1,14 +1,14 @@
 {
   "schema": 1,
-  "artifact_ref": "20bf1dc6a935d5df2326687abbcd7b26361a27e5",
-  "published_utc": "2026-11-06T18:28:58.802022+00:00",
+  "artifact_ref": "fc8e30626db1a2f8965c14e050f31a05bcb0ccb4",
+  "published_utc": "2026-11-07T12:12:01.230165+00:00",
   "components": {
     "channel-manager": {
-      "file": "release/2026.11.06.1/channel-manager.tar.gz",
-      "sha256": "b09362afdec63c553b4d772c2b0cd64b01dd798d33cac3106bdad97ad0c69acd",
-      "bytes": 85747,
-      "version": "2026.11.06.1"
+      "file": "release/2026.11.07.1/channel-manager.tar.gz",
+      "sha256": "ac9836a8697da6c1a9fa974edd339ffecb0a9807baa8212c17eb8f9cb3d33029",
+      "bytes": 71968,
+      "version": "2026.11.07.1"
     }
   },
-  "version": "2026.11.06.1"
+  "version": "2026.11.07.1"
 }
